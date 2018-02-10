@@ -1,5 +1,3 @@
-// https://qiita.com/exabugs/items/2f67ae363a1387c8967c
-
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h> 
 #include <ESP8266WebServer.h>
@@ -17,9 +15,9 @@ String host = HOST;
 int port = PORT;
 int id = ID;
 
-byte trqOn[] = {0xFA, 0xAF, 0x01, 0x00, 0x24, 0x01, 0x01, 0x01, 0x24};  //トルクON
-
-
+//byte trqOn[] = {0xFA, 0xAF, 0x01, 0x00, 0x24, 0x01, 0x01, 0x01, 0x24};  //トルクON
+byte trqOn[] = {0x01, 0x00, 0x24, 0x01, 0x01, 0x01};    //トルクON
+byte trqOff[] = {0x01, 0x00, 0x24, 0x01, 0x01, 0x00};   //トルクOFF
 
 
 
@@ -28,7 +26,8 @@ ESP8266WebServer server(80);
 WiFiClient client;
 
 SoftwareSerial SERVO(14, 12, false, 256);
-
+int current_angle = 180;
+int dist_angle = 180;
 
 /**
  * WiFi設定
@@ -112,30 +111,49 @@ void setup_server() {
 
 void Move_SV(unsigned char id, int angle) {
   unsigned char TxData[10];   //送信データバッファ [10byte]
-  unsigned char CheckSum = 0; // チェックサム計算用変数
-  TxData[0] = 0xFA;           // Header
-  TxData[1] = 0xAF;           // Header
-  TxData[2] = id;             // ID
-  TxData[3] = 0x00;           // Flags
-  TxData[4] = 0x1E;           // Address
-  TxData[5] = 0x02;           // Length
-  TxData[6] = 0x01;           // Count
+  TxData[0] = id;             // ID
+  TxData[1] = 0x00;           // Flags
+  TxData[2] = 0x1E;           // Address
+  TxData[3] = 0x02;           // Length
+  TxData[4] = 0x01;           // Count
   // Angle
-  TxData[7] = (unsigned char)0x00FF & angle;        // Low byte
-  TxData[8] = (unsigned char)0x00FF & (angle >> 8); //Hi byte
+  TxData[5] = (unsigned char)0x00FF & angle;        // Low byte
+  TxData[6] = (unsigned char)0x00FF & (angle >> 8); //Hi byte
+  cmd(TxData, 7);
+}
+
+void Move_SV(unsigned char id, int angle, int time) {
+  unsigned char TxData[10];   //送信データバッファ [10byte]
+  TxData[0] = id;             // ID
+  TxData[1] = 0x00;           // Flags
+  TxData[2] = 0x1E;           // Address
+  TxData[3] = 0x04;           // Length
+  TxData[4] = 0x01;           // Count
+  // Angle
+  TxData[5] = (unsigned char)0x00FF & angle;        // Low byte
+  TxData[6] = (unsigned char)0x00FF & (angle >> 8); //Hi byte
+  // Angle
+  TxData[7] = (unsigned char)0x00FF & time;        // Low byte
+  TxData[8] = (unsigned char)0x00FF & (time >> 8); //Hi byte
+  cmd(TxData, 9);
+}
+
+void cmd(unsigned char *cmd, int cnt) {
+  unsigned char CheckSum = 0; // チェックサム計算用変数
   // チェックサム計算
-  for(int i=2; i<=8; i++) {
-    CheckSum = CheckSum ^ TxData[i]; // ID～DATAまでのXOR
+  for(int i = 0; i < cnt; i++) {
+    CheckSum = CheckSum ^ cmd[i];
   }
-  TxData[9] = CheckSum;      //Sum
-  Serial.print("Move ");
-  Serial.print(angle);
-  Serial.print(" [");
-  for(int i=0; i<=9; i++) {
-    SERVO.write(TxData[i]);
-    Serial.print(TxData[i], HEX);
+  Serial.print("Cmd [FA AF ");
+  SERVO.write(0xFA);
+  SERVO.write(0xAF);
+  for(int i = 0; i< cnt; i++) {
+    SERVO.write(cmd[i]);
+    Serial.print(cmd[i], HEX);
     Serial.print(" ");
   }
+  SERVO.write(CheckSum);
+  Serial.print(CheckSum, HEX);
   Serial.println("]");
 }
 
@@ -168,7 +186,8 @@ void setup() {
     setup_client();
     setupMode = false;
   }
-  SERVO.write(trqOn, 9);      // トルクON
+//  SERVO.write(trqOn, 9);      // トルクON
+  cmd(trqOn, 6);      // トルクON
 }
 
 void loop() {
@@ -196,10 +215,27 @@ void loop() {
       Serial.print(" ");
       Serial.println(c3);
       if (c1 == 0xff && c2 == id) {
-        int angle = (c3-30) * 15;
-        Move_SV(1, angle);
+        dist_angle = c3;
       }
     }
-    delay(50);
+    // 
+    if (dist_angle != current_angle) {
+      int diff = dist_angle - current_angle;  // 差をだす
+      int now = diff > 3 ? 3 : diff;          // 今回動かす量(最大3)
+      now = diff < -3 ? -3 : diff;            // 今回動かす量(最少-3)
+      Serial.print(dist_angle);
+      Serial.print(" - ");
+      Serial.print(current_angle);
+      Serial.print(" = ");
+      Serial.print(diff);
+      Serial.print(" : ");
+      Serial.println(now);
+      current_angle += now;
+      int angle = (current_angle - 90) * 10;  // 1-180 => -90-90
+      cmd(trqOn, 6);        // トルクON
+      Move_SV(1, angle, 1);
+      delay(50);
+      cmd(trqOff, 6);      // トルクOFF
+    }
   }
 }
